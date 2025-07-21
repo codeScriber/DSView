@@ -1,48 +1,57 @@
-name: CMake
+name: Build DSView AppImage
 
 on:
+  workflow_dispatch:
   push:
     branches: [ master ]
   pull_request:
-    branches: [ master ]
-
-env:
-  BUILD_TYPE: Release
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-appimage:
+    runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          git gcc g++ make cmake qtbase5-dev qt5-qmake qtbase5-dev-tools \
+          libglib2.0-dev zlib1g-dev libusb-1.0-0-dev libboost-dev \
+          libfftw3-dev python3-dev libudev-dev pkg-config patchelf wget file
 
-    - name: Setup Container
-      run: sudo apt-get update && sudo apt-get install -y git-core build-essential cmake autoconf automake libtool pkg-config libglib2.0-dev libzip-dev libudev-dev libusb-1.0-0-dev python3-dev qt5-default libboost-dev libboost-test-dev libboost-thread-dev libboost-system-dev libboost-filesystem-dev check libfftw3-dev wget
+    - name: Clone DSView
+      run: |
+        git clone https://github.com/DreamSourceLab/DSView.git
 
-    - name: make staging area
-      run: mkdir -p ${{github.workspace}}/staging/AppDir
+    - name: Build and install DSView
+      run: |
+        cd DSView
+        mkdir build && cd build
+        cmake .. -DCMAKE_INSTALL_PREFIX=/usr
+        make -j$(nproc)
+        make DESTDIR=$PWD/AppDir install
 
-    - name: build libsigrok4DSL
-      run: cd libsigrok4DSL && ./autogen.sh && ./configure && make && make install DESTDIR=${{github.workspace}}/staging/AppDir && cd ..
+    - name: Download linuxdeploy and plugins
+      run: |
+        mkdir -p $HOME/linuxdeploy
+        cd $HOME/linuxdeploy
+        wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+        wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+        chmod +x linuxdeploy-*.AppImage
 
-    - name: build libsigrokdecode4DSL
-      run: cd libsigrokdecode4DSL && ./autogen.sh && ./configure && make && make install DESTDIR=${{github.workspace}}/staging/AppDir && cd ..
+    - name: Build AppImage
+      run: |
+        cd DSView/build
+        export VERSION="$(git describe --tags --always)"
+        export APPIMAGE_EXTRACT_AND_RUN=1
 
-    - name: fix AppImage pkgconfig files 
-      run: find ${{github.workspace}}/staging/AppDir/usr/local/lib/pkgconfig/*pc|xargs sed -i "s#/usr/local#${{github.workspace}}/staging/AppDir/usr/local#g"    
+        $HOME/linuxdeploy/linuxdeploy-x86_64.AppImage --appdir AppDir \
+          --output appimage \
+          --plugin qt
 
-    - name: build DSView
-      run: cd DSView && PKG_CONFIG_PATH="${{github.workspace}}/staging/AppDir/usr/local/lib/pkgconfig" cmake . -DCMAKE_INSTALL_PREFIX=/usr && make && make install DESTDIR="${{github.workspace}}/staging/AppDir"
-
-    - name: get AppImage util
-      run: cd ${{github.workspace}}/staging && wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage && chmod +x linuxdeploy-x86_64.AppImage
-
-    - name: create AppImage
-      run: cd ${{github.workspace}}/staging &&  LD_LIBRARY_PATH="${{github.workspace}}/staging/AppDir/usr/local/lib" ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage || ls -l
-
-    - name: Upload Artifact (AppImage)
+    - name: Upload AppImage artifact
       uses: actions/upload-artifact@v4
       with:
-        name: DSView.AppImage
-        path: ${{github.workspace}}/staging/*.AppImage
+        name: DSView-AppImage
+        path: DSView/build/*.AppImage
 
